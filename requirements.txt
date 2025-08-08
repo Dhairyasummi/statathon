@@ -1,0 +1,10 @@
+streamlit
+pandas
+numpy
+plotly
+seaborn
+matplotlib
+fpdf
+pillow
+openpyxl
+kaleido

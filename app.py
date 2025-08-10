@@ -2,21 +2,30 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-import seaborn as sns
-import matplotlib.pyplot as plt
 import io
 from fpdf import FPDF
 from PIL import Image
 
+# -------------- Custom Theming (Create .streamlit/config.toml for persistent theming) -----------
+st.set_page_config(page_title="Refined Data Profiling & Cleaning", layout="wide")
 
-################
-# Step 1: Data Ingestion & Initial Summary
-################
+# -------------- Custom Header Banner -----------
+st.markdown("""
+<div style='
+     background:#0A81D1;
+     color:white;
+     padding:28px 18px 12px 18px;
+     border-radius:16px;
+     margin-bottom:24px;'
+>
+    <h1 style='margin-bottom:0;'>Refined Data Profiling & Cleaning App</h1>
+    <p style='font-size:1.1em;'>Easy profiling, outlier handling, null checks, and clean report export in one place.</p>
+</div>
+""", unsafe_allow_html=True)
 
-st.title("Refined Data Profiling & Cleaning App")
-
-st.sidebar.header("Upload Dataset")
-uploaded_file = st.sidebar.file_uploader("Upload CSV or Excel file", type=["csv", "xlsx"])
+# -------------- Sidebar Upload -----------
+st.sidebar.header("📤 Upload Dataset")
+uploaded_file = st.sidebar.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"])
 
 def detect_delimiter(file_bytes):
     try:
@@ -27,6 +36,12 @@ def detect_delimiter(file_bytes):
     except:
         return ','
 
+# -------------- Section: Data Ingestion & Initial Summary -----------
+st.markdown(
+    "<h3 style='color: #0A81D1; border-left: 5px solid #4FC3F7; padding-left: 10px;'>Step 1: Data Ingestion & Initial Summary</h3>", 
+    unsafe_allow_html=True
+)
+
 if uploaded_file:
     if uploaded_file.name.endswith('.csv'):
         delimiter = detect_delimiter(uploaded_file)
@@ -34,10 +49,17 @@ if uploaded_file:
         df = pd.read_csv(uploaded_file, delimiter=delimiter, encoding='utf-8')
     else:
         df = pd.read_excel(uploaded_file)
-        
-    st.subheader("Initial Data Profile")
-    st.write(f"**Shape:** {df.shape[0]} rows × {df.shape[1]} columns")
-    
+
+    # Card Metric Display
+    card1, card2, card3 = st.columns(3)
+    with card1:
+        st.metric("Rows", f"{df.shape[0]}")
+    with card2:
+        st.metric("Columns", f"{df.shape[1]}")
+    with card3:
+        st.metric("Total Nulls", int(df.isnull().sum().sum()))
+
+    # Column summary table with conditional formatting
     col_data = []
     for col in df.columns:
         col_type = df[col].dtype
@@ -52,80 +74,99 @@ if uploaded_file:
     summary_df = pd.DataFrame(
         col_data, columns=["Column", "Type", "Unique", "Missing", "Sample Values"]
     )
-    st.dataframe(summary_df)
 
-    st.write("**Example (Head)**")
-    st.dataframe(df.head(5))
-    st.write("**Example (Tail)**")
-    st.dataframe(df.tail(5))
+    def highlight_missing(s):
+        bg = ['background-color: #FFE1E0' if v > 0 else '' for v in s]
+        return bg
+
+    st.markdown("#### Data Summary")
+    st.dataframe(
+        summary_df.style.apply(highlight_missing, subset=["Missing"]),
+        use_container_width=True
+    )
+
+    st.write("#### Data Example (Head & Tail)")
+    colH, colT = st.columns(2)
+    with colH:
+        st.dataframe(df.head(5), use_container_width=True)
+    with colT:
+        st.dataframe(df.tail(5), use_container_width=True)
 
     shape_txt = f"{df.shape[0]} rows × {df.shape[1]} columns"
 else:
-    st.info("Awaiting file upload...")
+    st.info("⬆ Please upload a file to start.")
     st.stop()
 
 profile_log = []
 input_log = {}
 
-################
-# Step 2: Outlier Detection
-################
+# -------------- Section: Outlier Detection -----------
+st.markdown(
+    "<h3 style='color: #29A746; border-left: 5px solid #80FFB0; padding-left: 10px;'>Step 2: Outlier Detection</h3>", 
+    unsafe_allow_html=True
+)
 
 numeric_cols = df.select_dtypes(include=np.number).columns.tolist()
 outlier_info = {}
 outlier_graphs = {}
-st.subheader("Step 2: Outlier Detection")
-st.write("Each numeric column is checked for outliers. Remove or replace?")
 
 for col in numeric_cols:
-    col_data = df[col].dropna()
-    q1, q3 = np.percentile(col_data, [25, 75])
+    col_data_clean = df[col].dropna()
+    q1, q3 = np.percentile(col_data_clean, [25, 75])
     iqr = q3 - q1
     lower, upper = q1 - 1.5 * iqr, q3 + 1.5 * iqr
-    outliers = col_data[(col_data < lower) | (col_data > upper)]
-    
+    outliers = col_data_clean[(col_data_clean < lower) | (col_data_clean > upper)]
+
     outlier_info[col] = {
         "count": len(outliers),
         "method": "IQR",
         "bounds": (lower, upper),
-        "total": len(col_data),
+        "total": len(col_data_clean)
     }
-    
-    fig = px.box(df, y=col, title=f"{col} (Outliers highlighted)")
-    outlier_graphs[col] = fig
-    
-    st.write(f"**{col}**: Outliers detected: {len(outliers)} out of {len(col_data)}")
-    st.plotly_chart(fig, use_container_width=True)
-    
-    explain = st.expander("Why?", expanded=False)
-    with explain:
-        st.markdown(f"Outliers are defined as values < {lower:.2f} or > {upper:.2f} (using IQR method).")
 
+    fig = px.box(df, y=col, title=f"{col} (Outliers highlighted)", boxmode="overlay", color_discrete_sequence=["#0A81D1"])
+    outlier_graphs[col] = fig
+
+    st.write(f"{col}: Outliers detected: {len(outliers)} of {len(col_data_clean)}")
+    st.plotly_chart(fig, use_container_width=True)
+
+    with st.expander("ℹ Why are these outliers?", expanded=False):
+        st.markdown(f"Outliers defined as values < *{lower:.2f}* or > *{upper:.2f}* (IQR method).")
+    
+    st.markdown("<div style='background-color:#D2F7E6;padding:11px 7px;border-radius:6px;'>", unsafe_allow_html=True)
     choice = st.radio(
-        f"Remove outliers in {col}?",
+        f"How to handle outliers in {col}?",
         ["Keep all", "Remove", "Replace with median", "Replace with mean"],
-        key=f"outlier_{col}"
+        key=f"out_{col}"
     )
-    input_log[f"outlier_{col}"] = choice
+    st.markdown("</div>", unsafe_allow_html=True)
+    input_log[f"out_{col}"] = choice
+
+    # Outlier handling logic
     if choice == "Remove":
         df = df[(df[col] >= lower) & (df[col] <= upper) | df[col].isna()]
+        st.success(f"✅ Outliers removed in {col}: {len(outliers)}")
         profile_log.append(f"Outliers removed in {col}: {len(outliers)}")
     elif choice == "Replace with median":
-        median_val = col_data.median()
-        df[col] = np.where((df[col] < lower) | (df[col] > upper), median_val, df[col])
+        med_val = col_data_clean.median()
+        df[col] = np.where((df[col] < lower) | (df[col] > upper), med_val, df[col])
+        st.info(f"🛠 Outliers replaced with median ({med_val:.2f})")
         profile_log.append(f"Outliers replaced (median) in {col}: {len(outliers)}")
     elif choice == "Replace with mean":
-        mean_val = col_data.mean()
+        mean_val = col_data_clean.mean()
         df[col] = np.where((df[col] < lower) | (df[col] > upper), mean_val, df[col])
+        st.info(f"🛠 Outliers replaced with mean ({mean_val:.2f})")
         profile_log.append(f"Outliers replaced (mean) in {col}: {len(outliers)}")
     else:
+        st.info("No outlier treatment applied.")
         profile_log.append(f"Outliers kept in {col}")
 
-################
-# Step 3: Null Value Handling
-################
+# -------------- Section: Null Value Handling -----------
 
-st.subheader("Step 3: Null Value Handling")
+st.markdown(
+    "<h3 style='color: #C1850A; border-left: 5px solid #FDD771; padding-left: 10px;'>Step 3: Null Value Handling</h3>", 
+    unsafe_allow_html=True
+)
 missing_summary = []
 for col in df.columns:
     missing = df[col].isna().sum()
@@ -135,7 +176,7 @@ for col in df.columns:
     missing_summary.append([col, missing, f"{missing_pct:.2f}%"])
 
 if missing_summary:
-    st.write(pd.DataFrame(missing_summary, columns=["Column", "Nulls", "Percentage"]))
+    st.dataframe(pd.DataFrame(missing_summary, columns=["Column", "Nulls", "Percentage"]), use_container_width=True)
     for col, missing, pct in missing_summary:
         col_type = df[col].dtype
         if col_type in [np.float64, np.int64]:
@@ -143,114 +184,113 @@ if missing_summary:
         else:
             methods = ["Fill with mode", "Fill with 'Unknown'", "Fill with custom value", "Drop rows with nulls"]
 
+        st.markdown("<div style='background-color:#FFF4DC;padding:11px 7px;border-radius:6px;'>", unsafe_allow_html=True)
         method = st.selectbox(f"Null handling for {col}", options=methods, key=f"null_{col}")
+        st.markdown("</div>", unsafe_allow_html=True)
         input_log[f"null_{col}"] = method
 
+        # Null handling
         if "mean" in method:
             fill = df[col].mean()
             df[col] = df[col].fillna(fill)
+            st.info(f"🧮 Filled nulls in {col} with mean ({fill:.2f})")
             profile_log.append(f"Filled nulls in {col} with mean ({fill:.2f})")
         elif "median" in method:
             fill = df[col].median()
             df[col] = df[col].fillna(fill)
+            st.info(f"🧮 Filled nulls in {col} with median ({fill:.2f})")
             profile_log.append(f"Filled nulls in {col} with median ({fill:.2f})")
         elif "mode" in method:
             fill = df[col].mode().iloc[0]
             df[col] = df[col].fillna(fill)
+            st.info(f"🧮 Filled nulls in {col} with mode ({fill})")
             profile_log.append(f"Filled nulls in {col} with mode ({fill})")
         elif "'Unknown'" in method:
             df[col] = df[col].fillna("Unknown")
+            st.info(f"🏷 Filled nulls in {col} with 'Unknown'")
             profile_log.append(f"Filled nulls in {col} with 'Unknown'")
         elif "custom" in method:
             fill = st.text_input(f"Custom fill value for {col}", key=f"custom_{col}")
             if fill != "":
                 df[col] = df[col].fillna(fill)
+                st.info(f"🧑‍💻 Filled nulls in {col} with custom value ({fill})")
                 profile_log.append(f"Filled nulls in {col} with custom value ({fill})")
         elif "Drop" in method:
             df = df[df[col].notna()]
+            st.warning(f"🧹 Dropped rows with nulls in {col}")
             profile_log.append(f"Dropped rows with nulls in {col}")
 else:
-    st.info("No nulls detected.")
+    st.success("No nulls detected.")
 
-################
-# Step 4: Duplicate Handling (Automated)
-################
-
-st.subheader("Step 4: Duplicate Handling")
+# -------------- Section: Duplicate Handling -----------
+st.markdown(
+    "<h3 style='color: #8B24C4; border-left: 5px solid #E3B7F6; padding-left: 10px;'>Step 4: Duplicate Handling</h3>", 
+    unsafe_allow_html=True
+)
 dupes = df.duplicated().sum()
 pct_dupes = 100 * dupes / len(df)
 if dupes:
     df = df.drop_duplicates()
+    st.success(f"✅ Removed {dupes} duplicates ({pct_dupes:.2f}%)")
     profile_log.append(f"Duplicates removed: {dupes} ({pct_dupes:.2f}% of total)")
-    st.success(f"Removed {dupes} duplicates ({pct_dupes:.2f}%)")
 else:
-    st.info("No duplicates found.")
+    st.info("✨ No duplicates found!")
 
-################
-# Step 5: Output & Report Generation
-################
-
-st.header("Summary & Exportable Report")
+# -------------- Section: Output & Report Generation -----------
+st.markdown(
+    "<h3 style='color: #0A81D1; border-left: 5px solid #4FC3F7; padding-left: 10px;'>Summary & Exportable Report</h3>", 
+    unsafe_allow_html=True
+)
 report_txt = f"""
-**Basic Info**
+*Basic Info*
 - Shape: {df.shape[0]} rows × {df.shape[1]} columns
 - Columns: {', '.join([f"{c} ({str(df[c].dtype)})" for c in df.columns])}
 - Unique value counts: {[df[c].nunique() for c in df.columns]}
 
-**Cleaning Summary**
+*Cleaning Summary*
 """
 report_txt += '\n'.join(["- " + log for log in profile_log])
 st.markdown(report_txt)
 
-# Visuals
-st.subheader("Visualizations")
+# --- Visualizations ---
+st.subheader("📊 Visualizations")
 nulls_after = [df[c].isnull().sum() for c in df.columns]
 fig1 = px.bar(
     x=df.columns,
     y=nulls_after,
     labels={'x': 'Column', 'y': 'Nulls'},
-    title="Null values after cleaning"
+    title="Null values after cleaning",
+    color_discrete_sequence=["#F05050"]
 )
-st.plotly_chart(fig1)
+st.plotly_chart(fig1, use_container_width=True)
 
+# Boxplots after cleaning for numeric columns
 for col in numeric_cols:
-    fig = px.box(df, y=col, title=f"{col} (After Outlier Handling)")
-    st.plotly_chart(fig)
+    fig = px.box(df, y=col, title=f"{col} (After Outlier Handling)", color_discrete_sequence=["#0A81D1"])
+    st.plotly_chart(fig, use_container_width=True)
 
 cat_cols = df.select_dtypes(include='object').columns.tolist()
 for col in cat_cols:
     vc = df[col].value_counts().head(10)
-    fig = px.bar(vc, title=f"Distribution: {col}")
-    st.plotly_chart(fig)
+    fig = px.bar(vc, title=f"Top Categories in {col}", color_discrete_sequence=["#0A81D1"])
+    st.plotly_chart(fig, use_container_width=True)
 
-################
-# Export Option
-################
-
-
-st.subheader("Download Cleaned Data & Report")
-
+# ------------- Download Section -------------
+st.subheader("⬇ Download Cleaned Data & Report")
 # CSV Download
-st.download_button("Download Cleaned CSV", df.to_csv(index=False), "cleaned_data.csv")
-
-# Excel Download (corrected!)
+st.download_button("⬇ Download Cleaned CSV", df.to_csv(index=False), "cleaned_data.csv")
+# Excel Download
 excel_buffer = io.BytesIO()
 df.to_excel(excel_buffer, index=False, engine='openpyxl')
 excel_buffer.seek(0)
 st.download_button(
-    label="Download Cleaned Excel",
+    label="📒 Download Cleaned Excel",
     data=excel_buffer,
     file_name="cleaned_data.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 )
 
-
-# PDF Report
-
-# Helper function to add Plotly figure to PDF
-# PDF Report
-
-# Helper function to add Plotly figure to PDF
+# ----------- PDF Report with Plots Support -----------
 def add_plot_to_pdf(fig, pdf, title=None):
     try:
         import plotly.io as pio
@@ -275,16 +315,12 @@ def add_plot_to_pdf(fig, pdf, title=None):
 
 # Collect visualizations already shown in Streamlit
 charts_to_include = []
-
-# Add nulls bar chart
 charts_to_include.append(("Null Values After Cleaning", fig1))
-
-# Add numeric column boxplots (already shown above)
+# Add numeric boxplots
 for col in numeric_cols:
     fig = px.box(df, y=col, title=f"{col} (After Outlier Handling)")
     charts_to_include.append((f"Boxplot: {col}", fig))
-
-# Add categorical bar plots (already shown above)
+# Categorical value counts
 for col in cat_cols:
     vc = df[col].value_counts().head(10)
     fig = px.bar(vc, title=f"Top Categories in {col}")
@@ -295,34 +331,35 @@ pdf = FPDF()
 pdf.add_page()
 pdf.set_font("Arial", size=12)
 
-# Add report text
+# Add report text (line by line for formatting)
 for line in report_txt.strip().split('\n'):
     pdf.multi_cell(0, 10, txt=line)
 
-# Add all collected plots to the PDF
+# Add all collected plots to PDF
 for title, fig in charts_to_include:
     add_plot_to_pdf(fig, pdf, title=title)
 
-# Save to byte stream and download
+# Save to bytes for Streamlit download
 pdf_bytes = pdf.output(dest="S").encode('latin1')
-st.download_button("Download PDF Report", data=pdf_bytes, file_name="data_cleaning_report.pdf")
+st.download_button("📄 Download PDF Report", data=pdf_bytes, file_name="data_cleaning_report.pdf")
 
-
-
-# Optional HTML report
-with st.expander("Export Complete HTML Report"):
+# Optional: HTML report for copying/sharing
+with st.expander("🖥 Export Complete HTML Report"):
     st.markdown(report_txt, unsafe_allow_html=True)
 
-################
-# Insights & Conclusion
-################
-
-st.header("Insights")
+# ------------- Insights & Conclusion -------------
+st.header("🔑 Insights")
 for col in numeric_cols:
     avg = df[col].mean()
-    st.write(f"Average {col}: {avg:,.2f}")
+    st.write(f"Average {col}: <span style='color:#0A81D1;font-weight:600'>{avg:,.2f}</span>", unsafe_allow_html=True)
 for col in cat_cols:
     top_cat = df[col].mode()[0]
-    st.write(f"Top category in {col}: {top_cat}")
+    st.write(f"Top category in *{col}*: <span style='color:#29A746;font-weight:600'>{top_cat}</span>", unsafe_allow_html=True)
 
-st.success("**Conclusion:** Data is now ready for statistical analysis.")
+st.success("*Conclusion:* Data is now ready for statistical analysis!")
+
+# ------------- End Banner -------------
+st.markdown(
+    "<div style='text-align:center;padding:24px 0 6px;'><img src='https://static.streamlit.io/examples/dice.jpg' width=55 /><br><span style='font-size:1.2em;font-weight:500;color:#0A81D1'>Thanks for using the Refined Data Profiling & Cleaning App!</span></div>",
+    unsafe_allow_html=True
+)

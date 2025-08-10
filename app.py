@@ -1,3 +1,4 @@
+import random
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -124,14 +125,26 @@ for col in numeric_cols:
         "total": len(col_data_clean)
     }
 
-    fig = px.box(df, y=col, title=f"{col} (Outliers highlighted)", boxmode="overlay", color_discrete_sequence=["#0A81D1"])
+    if pd.api.types.is_numeric_dtype(df[col]):
+        fig = px.box(
+            df,
+            y=col,
+            title=f"{col} (Outliers highlighted)",
+            boxmode="overlay",
+            color_discrete_sequence=["#0A81D1"]
+        )
+        st.plotly_chart(fig, use_container_width=True, key=f"outlier_chart_{col}")
+
+    else:
+        fig = None
+
     outlier_graphs[col] = fig
 
     st.write(f"{col}: Outliers detected: {len(outliers)} of {len(col_data_clean)}")
     st.plotly_chart(fig, use_container_width=True)
 
     with st.expander("ℹ Why are these outliers?", expanded=False):
-        st.markdown(f"Outliers defined as values < *{lower:.2f}* or > *{upper:.2f}* (IQR method).")
+        st.markdown(f"Outliers defined as values < {lower:.2f} or > {upper:.2f} (IQR method).")
     
     st.markdown("<div style='background-color:#D2F7E6;padding:11px 7px;border-radius:6px;'>", unsafe_allow_html=True)
     choice = st.radio(
@@ -242,39 +255,85 @@ st.markdown(
     unsafe_allow_html=True
 )
 report_txt = f"""
-*Basic Info*
+Basic Info
 - Shape: {df.shape[0]} rows × {df.shape[1]} columns
 - Columns: {', '.join([f"{c} ({str(df[c].dtype)})" for c in df.columns])}
 - Unique value counts: {[df[c].nunique() for c in df.columns]}
 
-*Cleaning Summary*
+Cleaning Summary
 """
 report_txt += '\n'.join(["- " + log for log in profile_log])
 st.markdown(report_txt)
 
+
+# === Prepare consistent column lists and one-time random selection ===
+numeric_cols = df.select_dtypes(include=np.number).columns.tolist()
+cat_cols = df.select_dtypes(include='object').columns.tolist()
+
+# Initialize one-time random picks per dataset upload (persist in session_state)
+if 'random_numeric' not in st.session_state:
+    st.session_state.random_numeric = random.sample(numeric_cols, min(5, len(numeric_cols))) if numeric_cols else []
+    st.session_state.random_categorical = random.sample(cat_cols, min(5, len(cat_cols))) if cat_cols else []
+    # pairs from the numeric selection
+    numeric_pairs_all = [(x, y) for i, x in enumerate(st.session_state.random_numeric) for y in st.session_state.random_numeric[i+1:]]
+    st.session_state.random_pairs = random.sample(numeric_pairs_all, min(3, len(numeric_pairs_all))) if numeric_pairs_all else []
+
+random_numeric = st.session_state.random_numeric
+random_categorical = st.session_state.random_categorical
+random_pairs = st.session_state.random_pairs
+
+# Placeholder for fig_nulls to guarantee it exists for PDF export even if visuals section aborts
+fig_nulls = None
+
 # --- Visualizations ---
 st.subheader("📊 Visualizations")
+
+# Null values bar chart (define fig_nulls consistently)
 nulls_after = [df[c].isnull().sum() for c in df.columns]
-fig1 = px.bar(
+fig_nulls = px.bar(
     x=df.columns,
     y=nulls_after,
     labels={'x': 'Column', 'y': 'Nulls'},
     title="Null values after cleaning",
     color_discrete_sequence=["#F05050"]
 )
-st.plotly_chart(fig1, use_container_width=True)
+st.plotly_chart(fig_nulls, use_container_width=True)
 
-# Boxplots after cleaning for numeric columns
-for col in numeric_cols:
-    fig = px.box(df, y=col, title=f"{col} (After Outlier Handling)", color_discrete_sequence=["#0A81D1"])
-    st.plotly_chart(fig, use_container_width=True)
+# Histograms for randomly selected numeric columns
+for col in random_numeric:
+    # skip if column not present (safety)
+    if col not in df.columns:
+        continue
+    fig_hist = px.histogram(df, x=col, nbins=30, title=f"Histogram: {col}", marginal="box")
+    st.plotly_chart(fig_hist, use_container_width=True)
 
-cat_cols = df.select_dtypes(include='object').columns.tolist()
-for col in cat_cols:
+# Pie charts for randomly selected categorical columns (only if cardinality reasonable)
+for col in random_categorical:
+    if col not in df.columns:
+        continue
     vc = df[col].value_counts().head(10)
-    fig = px.bar(vc, title=f"Top Categories in {col}", color_discrete_sequence=["#0A81D1"])
-    st.plotly_chart(fig, use_container_width=True)
+    fig_pie = px.pie(values=vc.values, names=vc.index, title=f"Distribution: {col}")
+    st.plotly_chart(fig_pie, use_container_width=True)
 
+# Correlation heatmap for all numeric columns (overall)
+if len(numeric_cols) > 1:
+    corr = df[numeric_cols].corr()
+    fig_corr = px.imshow(corr, text_auto=True, color_continuous_scale='RdBu_r', title="Correlation Heatmap")
+    st.plotly_chart(fig_corr, use_container_width=True)
+
+# Scatter plots for random numeric pairs
+for x_col, y_col in random_pairs:
+    if x_col in df.columns and y_col in df.columns:
+        fig_scatter = px.scatter(df, x=x_col, y=y_col, title=f"Scatter: {y_col} vs {x_col}")
+        st.plotly_chart(fig_scatter, use_container_width=True)
+
+# Bar charts for randomly selected categorical columns (top categories)
+for col in random_categorical:
+    if col not in df.columns:
+        continue
+    vc = df[col].value_counts().head(10)
+    fig_bar = px.bar(vc, title=f"Top Categories in {col}", color_discrete_sequence=["#0A81D1"])
+    st.plotly_chart(fig_bar, use_container_width=True)
 # ------------- Download Section -------------
 st.subheader("⬇ Download Cleaned Data & Report")
 # CSV Download
@@ -313,19 +372,44 @@ def add_plot_to_pdf(fig, pdf, title=None):
         pdf.ln(5)
         pdf.cell(0, 10, f"[Plot '{title}' could not be included due to export error.]", ln=True)
 
-# Collect visualizations already shown in Streamlit
-charts_to_include = []
-charts_to_include.append(("Null Values After Cleaning", fig1))
-# Add numeric boxplots
-for col in numeric_cols:
-    fig = px.box(df, y=col, title=f"{col} (After Outlier Handling)")
-    charts_to_include.append((f"Boxplot: {col}", fig))
-# Categorical value counts
-for col in cat_cols:
-    vc = df[col].value_counts().head(10)
-    fig = px.bar(vc, title=f"Top Categories in {col}")
-    charts_to_include.append((f"Category Distribution: {col}", fig))
 
+
+# Collect visualizations for PDF (matching UI selections)
+charts_to_include = []
+# add nulls chart
+if fig_nulls is not None:
+    charts_to_include.append(("Null Values After Cleaning", fig_nulls))
+
+# Histograms (random_numeric)
+for col in random_numeric:
+    if col in df.columns:
+        fig_hist = px.histogram(df, x=col, nbins=30, title=f"Histogram: {col}", marginal="box")
+        charts_to_include.append((f"Histogram: {col}", fig_hist))
+
+# Pie charts (random_categorical)
+for col in random_categorical:
+    if col in df.columns:
+        vc = df[col].value_counts().head(10)
+        fig_pie = px.pie(values=vc.values, names=vc.index, title=f"Distribution: {col}")
+        charts_to_include.append((f"Distribution: {col}", fig_pie))
+
+# Correlation heatmap
+if len(numeric_cols) > 1:
+    fig_corr = px.imshow(df[numeric_cols].corr(), text_auto=True, color_continuous_scale='RdBu_r', title="Correlation Heatmap")
+    charts_to_include.append(("Correlation Heatmap", fig_corr))
+
+# Scatter plots (random_pairs)
+for x_col, y_col in random_pairs:
+    if x_col in df.columns and y_col in df.columns:
+        fig_scatter = px.scatter(df, x=x_col, y=y_col, title=f"Scatter: {y_col} vs {x_col}")
+        charts_to_include.append((f"Scatter: {y_col} vs {x_col}", fig_scatter))
+
+# Bar charts (random_categorical)
+for col in random_categorical:
+    if col in df.columns:
+        vc = df[col].value_counts().head(10)
+        fig_bar = px.bar(vc, title=f"Top Categories in {col}", color_discrete_sequence=["#0A81D1"])
+        charts_to_include.append((f"Top Categories in {col}", fig_bar))
 # Generate PDF
 pdf = FPDF()
 pdf.add_page()
@@ -354,9 +438,9 @@ for col in numeric_cols:
     st.write(f"Average {col}: <span style='color:#0A81D1;font-weight:600'>{avg:,.2f}</span>", unsafe_allow_html=True)
 for col in cat_cols:
     top_cat = df[col].mode()[0]
-    st.write(f"Top category in *{col}*: <span style='color:#29A746;font-weight:600'>{top_cat}</span>", unsafe_allow_html=True)
+    st.write(f"Top category in {col}: <span style='color:#29A746;font-weight:600'>{top_cat}</span>", unsafe_allow_html=True)
 
-st.success("*Conclusion:* Data is now ready for statistical analysis!")
+st.success("Conclusion: Data is now ready for statistical analysis!")
 
 # ------------- End Banner -------------
 st.markdown(

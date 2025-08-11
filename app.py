@@ -77,7 +77,7 @@ if uploaded_file:
     )
 
     def highlight_missing(s):
-        bg = ['background-color: #FFE1E0' if v > 0 else '' for v in s]
+        bg = ['background-color: #F8D7DA; color: #721C24; font-weight: bold;' if v > 0 else '' for v in s]
         return bg
 
     st.markdown("#### Data Summary")
@@ -125,18 +125,7 @@ for col in numeric_cols:
         "total": len(col_data_clean)
     }
 
-    if pd.api.types.is_numeric_dtype(df[col]):
-        fig = px.box(
-            df,
-            y=col,
-            title=f"{col} (Outliers highlighted)",
-            boxmode="overlay",
-            color_discrete_sequence=["#0A81D1"]
-        )
-        st.plotly_chart(fig, use_container_width=True, key=f"outlier_chart_{col}")
-
-    else:
-        fig = None
+    fig = px.box(df, y=col, boxmode="overlay", color_discrete_sequence=["#0A81D1"])
 
     outlier_graphs[col] = fig
 
@@ -144,7 +133,7 @@ for col in numeric_cols:
     st.plotly_chart(fig, use_container_width=True)
 
     with st.expander("ℹ Why are these outliers?", expanded=False):
-        st.markdown(f"Outliers defined as values < {lower:.2f} or > {upper:.2f} (IQR method).")
+        st.markdown(f"Outliers defined as values < *{lower:.2f}* or > *{upper:.2f}* (IQR method).")
     
     st.markdown("<div style='background-color:#D2F7E6;padding:11px 7px;border-radius:6px;'>", unsafe_allow_html=True)
     choice = st.radio(
@@ -255,12 +244,12 @@ st.markdown(
     unsafe_allow_html=True
 )
 report_txt = f"""
-Basic Info
+*Basic Info*
 - Shape: {df.shape[0]} rows × {df.shape[1]} columns
 - Columns: {', '.join([f"{c} ({str(df[c].dtype)})" for c in df.columns])}
 - Unique value counts: {[df[c].nunique() for c in df.columns]}
 
-Cleaning Summary
+*Cleaning Summary*
 """
 report_txt += '\n'.join(["- " + log for log in profile_log])
 st.markdown(report_txt)
@@ -438,12 +427,54 @@ for col in numeric_cols:
     st.write(f"Average {col}: <span style='color:#0A81D1;font-weight:600'>{avg:,.2f}</span>", unsafe_allow_html=True)
 for col in cat_cols:
     top_cat = df[col].mode()[0]
-    st.write(f"Top category in {col}: <span style='color:#29A746;font-weight:600'>{top_cat}</span>", unsafe_allow_html=True)
+    st.write(f"Top category in *{col}*: <span style='color:#29A746;font-weight:600'>{top_cat}</span>", unsafe_allow_html=True)
 
-st.success("Conclusion: Data is now ready for statistical analysis!")
+st.success("*Conclusion:* Data is now ready for statistical analysis!")
 
 # ------------- End Banner -------------
 st.markdown(
     "<div style='text-align:center;padding:24px 0 6px;'><img src='https://static.streamlit.io/examples/dice.jpg' width=55 /><br><span style='font-size:1.2em;font-weight:500;color:#0A81D1'>Thanks for using the Refined Data Profiling & Cleaning App!</span></div>",
     unsafe_allow_html=True
 )
+
+# =============================
+# Matplotlib PDF Export Helpers
+# =============================
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+def add_matplotlib_chart_to_pdf(data, chart_type, pdf, title):
+    fig, ax = plt.subplots()
+    if chart_type == "hist":
+        ax.hist(data.dropna(), bins=20, color="#0A81D1")
+        ax.set_xlabel(data.name if hasattr(data, 'name') else 'Value')
+        ax.set_ylabel("Frequency")
+    elif chart_type == "pie":
+        counts = data.value_counts()
+        ax.pie(counts, labels=counts.index.astype(str), autopct='%1.1f%%')
+    elif chart_type == "bar":
+        counts = data.value_counts()
+        ax.bar(counts.index.astype(str), counts.values, color="#0A81D1")
+        ax.set_xticklabels(counts.index.astype(str), rotation=45, ha="right")
+    elif chart_type == "scatter":
+        if isinstance(data, pd.DataFrame) and len(data.columns) >= 2:
+            ax.scatter(data.iloc[:, 0], data.iloc[:, 1], alpha=0.7)
+            ax.set_xlabel(data.columns[0])
+            ax.set_ylabel(data.columns[1])
+    ax.set_title(title)
+    img_path = "temp_plot.png"
+    plt.tight_layout()
+    plt.savefig(img_path, bbox_inches="tight")
+    plt.close(fig)
+    pdf.image(img_path, w=180)
+
+def add_matplotlib_correlation_heatmap(df, pdf, title):
+    fig, ax = plt.subplots(figsize=(8, 6))
+    corr = df.corr()
+    sns.heatmap(corr, annot=True, cmap="coolwarm", fmt=".2f", ax=ax)
+    ax.set_title(title)
+    img_path = "temp_corr.png"
+    plt.tight_layout()
+    plt.savefig(img_path, bbox_inches="tight")
+    plt.close(fig)
+    pdf.image(img_path, w=180)

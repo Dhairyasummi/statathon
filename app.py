@@ -77,7 +77,7 @@ if uploaded_file:
     )
 
     def highlight_missing(s):
-        bg = ['background-color: #F8D7DA; color: #721C24; font-weight: bold;' if v > 0 else '' for v in s]
+        bg = ['background-color: #FFE1E0' if v > 0 else '' for v in s]
         return bg
 
     st.markdown("#### Data Summary")
@@ -94,6 +94,9 @@ if uploaded_file:
         st.dataframe(df.tail(5), use_container_width=True)
 
     shape_txt = f"{df.shape[0]} rows × {df.shape[1]} columns"
+
+    # Initialize list to store chart metadata for PDF export
+    charts_meta = []
 else:
     st.info("⬆ Please upload a file to start.")
     st.stop()
@@ -295,6 +298,7 @@ for col in random_numeric:
         continue
     fig_hist = px.histogram(df, x=col, nbins=30, title=f"Histogram: {col}", marginal="box")
     st.plotly_chart(fig_hist, use_container_width=True)
+charts_meta.append(("hist", f"Histogram: {col}", df[col]))
 
 # Pie charts for randomly selected categorical columns (only if cardinality reasonable)
 for col in random_categorical:
@@ -303,18 +307,21 @@ for col in random_categorical:
     vc = df[col].value_counts().head(10)
     fig_pie = px.pie(values=vc.values, names=vc.index, title=f"Distribution: {col}")
     st.plotly_chart(fig_pie, use_container_width=True)
+charts_meta.append(("pie", f"Distribution: {col}", df[col]))
 
 # Correlation heatmap for all numeric columns (overall)
 if len(numeric_cols) > 1:
     corr = df[numeric_cols].corr()
     fig_corr = px.imshow(corr, text_auto=True, color_continuous_scale='RdBu_r', title="Correlation Heatmap")
     st.plotly_chart(fig_corr, use_container_width=True)
+charts_meta.append(("corr", "Correlation Heatmap", df[numeric_cols]))
 
 # Scatter plots for random numeric pairs
 for x_col, y_col in random_pairs:
     if x_col in df.columns and y_col in df.columns:
         fig_scatter = px.scatter(df, x=x_col, y=y_col, title=f"Scatter: {y_col} vs {x_col}")
         st.plotly_chart(fig_scatter, use_container_width=True)
+charts_meta.append(("scatter", f"Scatter: {y_col} vs {x_col}", df[[x_col, y_col]]))
 
 # Bar charts for randomly selected categorical columns (top categories)
 for col in random_categorical:
@@ -323,6 +330,7 @@ for col in random_categorical:
     vc = df[col].value_counts().head(10)
     fig_bar = px.bar(vc, title=f"Top Categories in {col}", color_discrete_sequence=["#0A81D1"])
     st.plotly_chart(fig_bar, use_container_width=True)
+charts_meta.append(("bar", f"Top Categories in {col}", df[col]))
 # ------------- Download Section -------------
 st.subheader("⬇ Download Cleaned Data & Report")
 # CSV Download
@@ -363,42 +371,48 @@ def add_plot_to_pdf(fig, pdf, title=None):
 
 
 
-# Collect visualizations for PDF (matching UI selections)
-charts_to_include = []
-# add nulls chart
-if fig_nulls is not None:
-    charts_to_include.append(("Null Values After Cleaning", fig_nulls))
+# =============================
+# Matplotlib PDF Export Helpers
+# =============================
+import matplotlib.pyplot as plt
+import seaborn as sns
 
-# Histograms (random_numeric)
-for col in random_numeric:
-    if col in df.columns:
-        fig_hist = px.histogram(df, x=col, nbins=30, title=f"Histogram: {col}", marginal="box")
-        charts_to_include.append((f"Histogram: {col}", fig_hist))
+def add_matplotlib_chart_to_pdf(data, chart_type, pdf, title):
+    fig, ax = plt.subplots()
+    if chart_type == "hist":
+        ax.hist(data.dropna(), bins=20, color="#0A81D1")
+        ax.set_xlabel(data.name if hasattr(data, 'name') else 'Value')
+        ax.set_ylabel("Frequency")
+    elif chart_type == "pie":
+        counts = data.value_counts()
+        ax.pie(counts, labels=counts.index.astype(str), autopct='%1.1f%%')
+    elif chart_type == "bar":
+        counts = data.value_counts()
+        ax.bar(counts.index.astype(str), counts.values, color="#0A81D1")
+        ax.set_xticklabels(counts.index.astype(str), rotation=45, ha="right")
+    elif chart_type == "scatter":
+        if isinstance(data, pd.DataFrame) and len(data.columns) >= 2:
+            ax.scatter(data.iloc[:, 0], data.iloc[:, 1], alpha=0.7)
+            ax.set_xlabel(data.columns[0])
+            ax.set_ylabel(data.columns[1])
+    ax.set_title(title)
+    img_path = "temp_plot.png"
+    plt.tight_layout()
+    plt.savefig(img_path, bbox_inches="tight")
+    plt.close(fig)
+    pdf.image(img_path, w=180)
 
-# Pie charts (random_categorical)
-for col in random_categorical:
-    if col in df.columns:
-        vc = df[col].value_counts().head(10)
-        fig_pie = px.pie(values=vc.values, names=vc.index, title=f"Distribution: {col}")
-        charts_to_include.append((f"Distribution: {col}", fig_pie))
+def add_matplotlib_correlation_heatmap(df, pdf, title):
+    fig, ax = plt.subplots(figsize=(8, 6))
+    corr = df.corr()
+    sns.heatmap(corr, annot=True, cmap="coolwarm", fmt=".2f", ax=ax)
+    ax.set_title(title)
+    img_path = "temp_corr.png"
+    plt.tight_layout()
+    plt.savefig(img_path, bbox_inches="tight")
+    plt.close(fig)
+    pdf.image(img_path, w=180)
 
-# Correlation heatmap
-if len(numeric_cols) > 1:
-    fig_corr = px.imshow(df[numeric_cols].corr(), text_auto=True, color_continuous_scale='RdBu_r', title="Correlation Heatmap")
-    charts_to_include.append(("Correlation Heatmap", fig_corr))
-
-# Scatter plots (random_pairs)
-for x_col, y_col in random_pairs:
-    if x_col in df.columns and y_col in df.columns:
-        fig_scatter = px.scatter(df, x=x_col, y=y_col, title=f"Scatter: {y_col} vs {x_col}")
-        charts_to_include.append((f"Scatter: {y_col} vs {x_col}", fig_scatter))
-
-# Bar charts (random_categorical)
-for col in random_categorical:
-    if col in df.columns:
-        vc = df[col].value_counts().head(10)
-        fig_bar = px.bar(vc, title=f"Top Categories in {col}", color_discrete_sequence=["#0A81D1"])
-        charts_to_include.append((f"Top Categories in {col}", fig_bar))
 # Generate PDF
 pdf = FPDF()
 pdf.add_page()
@@ -408,9 +422,12 @@ pdf.set_font("Arial", size=12)
 for line in report_txt.strip().split('\n'):
     pdf.multi_cell(0, 10, txt=line)
 
-# Add all collected plots to PDF
-for title, fig in charts_to_include:
-    add_plot_to_pdf(fig, pdf, title=title)
+# Add all collected plots to PDF using Matplotlib fallback
+for chart_type, title, data in charts_meta:
+    if chart_type == "corr":
+        add_matplotlib_correlation_heatmap(data, pdf, title)
+    else:
+        add_matplotlib_chart_to_pdf(data, chart_type, pdf, title)
 
 # Save to bytes for Streamlit download
 pdf_bytes = pdf.output(dest="S").encode('latin1')
